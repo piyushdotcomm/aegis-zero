@@ -1,0 +1,5 @@
+pyexasol[pandas]
+sqlglot
+cryptography
+pytest
+pytest-cov
