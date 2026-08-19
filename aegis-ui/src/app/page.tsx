@@ -175,6 +175,18 @@ export default function Home() {
 
               {result && !loading && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                  {/* Decision Badge - ALWAYS RENDER */}
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-medium text-gray-400">Security Decision:</span>
+                    <div className={`px-3 py-1 rounded-full text-xs font-bold tracking-wider ${
+                      result.decision === 'INVARIANT_VERIFIED' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
+                      result.decision === 'BREACH_BLOCKED' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
+                      'bg-gray-800 text-gray-300'
+                    }`}>
+                      {result.decision || 'UNKNOWN'}
+                    </div>
+                  </div>
+
                   {result.error ? (
                     <div className="bg-red-950/50 border border-red-900/50 rounded-lg p-4">
                       <div className="flex items-center gap-2 text-red-400 mb-2">
@@ -185,18 +197,6 @@ export default function Home() {
                     </div>
                   ) : (
                     <>
-                      {/* Decision Badge */}
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-medium text-gray-400">Security Decision:</span>
-                        <div className={`px-3 py-1 rounded-full text-xs font-bold tracking-wider ${
-                          result.decision === 'INVARIANT_VERIFIED' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
-                          result.decision === 'BREACH_BLOCKED' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
-                          'bg-gray-800 text-gray-300'
-                        }`}>
-                          {result.decision || 'UNKNOWN'}
-                        </div>
-                      </div>
-
                       {/* Rewritten SQL */}
                       <div>
                         <label className="block text-xs font-medium text-gray-400 mb-1">Rewritten SQL (Safe)</label>
@@ -207,9 +207,15 @@ export default function Home() {
 
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-xs font-medium text-gray-400 mb-1">Sanitized Rows</label>
+                          <label className="block text-xs font-medium text-gray-400 mb-1">Total Rows Returned</label>
                           <div className="text-xl font-semibold text-gray-200">
-                            {result.row_count !== undefined ? result.row_count : '—'}
+                            {result.row_count !== undefined ? result.row_count : '???'}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-400 mb-1">Tainted Rows Scrubbed</label>
+                          <div className={`text-xl font-semibold ${result.tainted_rows > 0 ? 'text-red-400' : 'text-gray-200'}`}>
+                            {result.tainted_rows !== undefined ? result.tainted_rows : '0'}
                           </div>
                         </div>
                       </div>
