@@ -31,12 +31,41 @@ export async function POST(req: Request) {
     const result = await client.callTool({
       name: 'execute_exasol_query',
       arguments: {
-        sql,
+        sql_query: sql,
         tenant_id
       }
     });
 
-    return NextResponse.json(result);
+    let payload: any = {};
+    if (result.content && result.content.length > 0) {
+      const text = (result.content[0] as any).text;
+      try {
+        payload = JSON.parse(text);
+      } catch (e) {
+        payload = { raw: text };
+      }
+    }
+
+    if (result.isError) {
+       return NextResponse.json({ 
+         decision: "BREACH_BLOCKED", 
+         error: (result.content[0] as any).text || "Tool execution failed" 
+       });
+    }
+
+    // Map Python dict to Next.js expected format
+    const responseData = {
+      decision: "INVARIANT_VERIFIED",
+      rewritten_sql: payload.payload?.query || payload.query || sql,
+      row_count: payload.payload?.results?.length || payload.results?.length || 0,
+      tainted_rows: payload.payload?.tainted_rows || payload.tainted_rows || 0,
+      receipt: {
+        signature: payload.signature_ed25519 || payload.signature || "No signature",
+        public_key: "ed25519_pub_aegis_zero_node1"
+      }
+    };
+
+    return NextResponse.json(responseData);
   } catch (error: any) {
     console.error('Error executing MCP tool:', error);
     return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });

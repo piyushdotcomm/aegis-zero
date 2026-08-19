@@ -1,4 +1,4 @@
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from aegis.security.pipeline import AegisSecurityPipeline
 from aegis.exasol_client.connection import get_connection
 import os
