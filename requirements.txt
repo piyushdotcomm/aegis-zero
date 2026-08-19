@@ -3,3 +3,4 @@ sqlglot
 cryptography
 pytest
 pytest-cov
+mcp[cli]
