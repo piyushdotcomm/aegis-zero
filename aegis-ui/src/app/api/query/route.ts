@@ -3,79 +3,104 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import path from 'path';
 
-export async function POST(req: Request) {
-  let transport: StdioClientTransport | null = null;
+async function callMcpTool(toolName: string, args: Record<string, unknown>) {
+  const isWindows = process.platform === 'win32';
+  const pythonBin = isWindows ? 'python.exe' : 'python';
+  const pythonPath = path.join(process.cwd(), '..', 'venv', isWindows ? 'Scripts' : 'bin', pythonBin);
+  const serverPath = path.join(process.cwd(), '..', 'server.py');
+
+  const transport = new StdioClientTransport({
+    command: pythonPath,
+    args: [serverPath],
+  });
+
   try {
-    const body = await req.json();
-    const { sql, tenant_id } = body;
-
-    if (!sql || !tenant_id) {
-      return NextResponse.json({ error: 'Missing sql or tenant_id' }, { status: 400 });
-    }
-
-    const pythonPath = path.join(process.cwd(), '..', 'venv', 'Scripts', 'python.exe');
-    const serverPath = path.join(process.cwd(), '..', 'server.py');
-
-    transport = new StdioClientTransport({
-      command: pythonPath,
-      args: [serverPath]
-    });
-
     const client = new Client(
       { name: 'aegis-ui', version: '1.0.0' },
-      { capabilities: {} }
+      { capabilities: {} },
     );
-
     await client.connect(transport);
-
-    const result = await client.callTool({
-      name: 'execute_exasol_query',
-      arguments: {
-        sql_query: sql,
-        tenant_id
-      }
-    });
+    const result: any = await client.callTool({ name: toolName, arguments: args });
 
     let payload: any = {};
     if (result.content && result.content.length > 0) {
-      const text = (result.content[0] as any).text;
+      const text = result.content[0].text;
       try {
         payload = JSON.parse(text);
-      } catch (e) {
+      } catch {
         payload = { raw: text };
       }
     }
 
     if (result.isError) {
-       return NextResponse.json({ 
-         decision: "BREACH_BLOCKED", 
-         error: (result.content[0] as any).text || "Tool execution failed" 
-       });
+      return {
+        decision: 'BREACH_BLOCKED',
+        error: result.content?.[0]?.text || 'Tool execution failed',
+      };
     }
 
-    // Map Python dict to Next.js expected format
-    const responseData = {
-      decision: "INVARIANT_VERIFIED",
-      rewritten_sql: payload.payload?.query || payload.query || sql,
-      row_count: payload.payload?.results?.length || payload.results?.length || 0,
-      tainted_rows: payload.payload?.tainted_rows || payload.tainted_rows || 0,
-      receipt: {
-        signature: payload.signature_ed25519 || payload.signature || "No signature",
-        public_key: "ed25519_pub_aegis_zero_node1"
-      }
-    };
+    return payload;
+  } finally {
+    try {
+      await transport.close();
+    } catch {
+      // transport may already be closed
+    }
+  }
+}
 
-    return NextResponse.json(responseData);
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const { sql, tenant_id, mode } = body;
+
+    if (!sql) {
+      return NextResponse.json({ error: 'Missing sql' }, { status: 400 });
+    }
+
+    if (mode === 'unprotected') {
+      const payload = await callMcpTool('execute_unprotected_query', { sql_query: sql });
+      return NextResponse.json({
+        mode: 'unprotected',
+        executed: payload.executed ?? false,
+        rolled_back: payload.rolled_back ?? true,
+        error: payload.error || null,
+        rows: payload.rows || [],
+        row_count: payload.row_count ?? payload.rows?.length ?? 0,
+      });
+    }
+
+    // Protected path (default)
+    if (!tenant_id) {
+      return NextResponse.json({ error: 'Missing tenant_id' }, { status: 400 });
+    }
+
+    const payload = await callMcpTool('execute_exasol_query', { sql_query: sql, tenant_id });
+
+    const receipt = payload.receipt || {};
+
+    return NextResponse.json({
+      mode: 'protected',
+      decision: payload.decision || 'UNKNOWN',
+      code: payload.code || null,
+      message: payload.message || null,
+      hint: payload.hint || null,
+      original_sql: payload.original_sql || sql,
+      rewritten_sql: payload.rewritten_sql || null,
+      rows: payload.results || [],
+      row_count: payload.row_count ?? 0,
+      tainted_rows: payload.tainted_rows ?? 0,
+      receipt: {
+        receipt_id: receipt.receipt_id || null,
+        timestamp: receipt.timestamp_utc || null,
+        signature: receipt.signature_ed25519 || null,
+        public_key: receipt.public_key_ed25519 || null,
+        policy_version: receipt.policy_version || null,
+        decision: receipt.decision || null,
+      },
+    });
   } catch (error: any) {
     console.error('Error executing MCP tool:', error);
     return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
-  } finally {
-    if (transport) {
-      try {
-        await transport.close();
-      } catch (err) {
-        console.error('Error closing transport:', err);
-      }
-    }
   }
 }

@@ -24,3 +24,50 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Custom Scrollbar for Terminal Aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-top: 1px solid #1A1A1A;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333333;
+  border-radius: 0px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #00F0FF;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #333333 transparent;
+}
+
+/* Cryptographic Receipt Animation */
+@keyframes mint-receipt {
+  0% { 
+    opacity: 0; 
+    transform: translateY(-8px) scale(0.99); 
+    border-color: transparent; 
+  }
+  100% { 
+    opacity: 1; 
+    transform: translateY(0) scale(1); 
+    border-color: rgba(0, 240, 255, 0.3); 
+  }
+}
+
+.animate-mint {
+  animation: mint-receipt 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

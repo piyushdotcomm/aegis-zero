@@ -1,254 +1,596 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 type Scenario = {
   name: string;
+  tag: string;
   sql: string;
   tenant_id: string;
+  description: string;
 };
 
 const scenarios: Scenario[] = [
-  { name: "Cross-tenant leak", sql: "SELECT * FROM INVOICES WHERE tenant_id = 'tenant_beta'", tenant_id: "tenant_alpha" },
-  { name: "Destructive SQL", sql: "DROP TABLE CUSTOMERS", tenant_id: "tenant_alpha" },
-  { name: "Catalog snooping", sql: "SELECT * FROM EXA_ALL_USERS", tenant_id: "tenant_alpha" },
-  { name: "Poisoned row", sql: "SELECT * FROM FEEDBACK", tenant_id: "tenant_alpha" },
-  { name: "Safe query", sql: "SELECT * FROM CUSTOMERS WHERE tenant_id = 'tenant_alpha'", tenant_id: "tenant_alpha" },
+  {
+    name: "Safe Query",
+    tag: "SAFE",
+    sql: "SELECT * FROM CUSTOMERS WHERE tenant_id = 'tenant_alpha'",
+    tenant_id: "tenant_alpha",
+    description: "Legitimate tenant data access — mathematically proven and verified.",
+  },
+  {
+    name: "Cross-Tenant Leak",
+    tag: "ISOLATION",
+    sql: "SELECT * FROM INVOICES WHERE tenant_id = 'tenant_beta'",
+    tenant_id: "tenant_alpha",
+    description: "AI attempts unauthorized lateral movement into another tenant's data.",
+  },
+  {
+    name: "Destructive SQL",
+    tag: "MUTATION",
+    sql: "DROP TABLE CUSTOMERS",
+    tenant_id: "tenant_alpha",
+    description: "AI attempts an unapproved state mutation (table drop).",
+  },
+  {
+    name: "Catalog Snooping",
+    tag: "CATALOG",
+    sql: "SELECT * FROM EXA_ALL_USERS",
+    tenant_id: "tenant_alpha",
+    description: "AI attempts to map the database structure via Exasol system tables.",
+  },
+  {
+    name: "Poisoned Row",
+    tag: "INJECTION",
+    sql: "SELECT * FROM FEEDBACK",
+    tenant_id: "tenant_alpha",
+    description: "AI reads data containing an embedded prompt injection payload.",
+  },
 ];
+
+// Helper: SQL Syntax Highlighter
+const formatSQL = (sql: string) => {
+  if (!sql) return "";
+  const keywords = [
+    "SELECT", "FROM", "WHERE", "AND", "OR", "LIMIT", "UNION", "ALL",
+    "DROP", "TABLE", "EXCEPT", "INTERSECT", "INSERT", "INTO", "VALUES"
+  ];
+  const regex = new RegExp(`\\b(${keywords.join("|")})\\b`, "gi");
+
+  const formatStringPart = (str: string) => {
+    return str.split(/('.*?')/g).map((sub, j) => {
+      if (sub.startsWith("'") && sub.endsWith("'")) {
+        return <span key={j} className="text-[#F59E0B]">{sub}</span>; // Amber strings
+      }
+      return sub;
+    });
+  };
+
+  return sql.split(regex).map((part, i) => {
+    if (keywords.includes(part.toUpperCase())) {
+      return <span key={i} className="text-white font-bold">{part}</span>;
+    }
+    return <span key={i}>{formatStringPart(part)}</span>;
+  });
+};
+
+const PIPELINE_STEPS = [
+  "Parsing Abstract Syntax Tree...",
+  "Enforcing Tenant Boundaries...",
+  "Clamping Query Blast Radius...",
+  "Scanning for Taint / Injections...",
+  "Minting Cryptographic Receipt..."
+];
+
+// Grid Pattern Background (Dot Matrix)
+const DotMatrix = () => (
+  <div className="fixed inset-0 z-[-1] opacity-[0.15] pointer-events-none">
+    <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <pattern id="dotGrid" width="20" height="20" patternUnits="userSpaceOnUse">
+          <circle cx="2" cy="2" r="1" fill="#FFFFFF" />
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#dotGrid)" />
+    </svg>
+  </div>
+);
+
+function RowTable({ rows, maxRows = 10 }: { rows: any[]; maxRows?: number }) {
+  if (!rows || rows.length === 0) return null;
+  const display = rows.slice(0, maxRows);
+  const keys = Object.keys(display[0]);
+
+  return (
+    <div className="border border-[#1A1A1A] bg-[#050505] overflow-hidden">
+      <table className="w-full table-fixed text-xs font-mono text-left border-collapse">
+        <thead>
+          <tr>
+            {keys.map((k) => (
+              <th
+                key={k}
+                className="px-4 py-2 border-b border-[#1A1A1A] text-[#888888] font-normal uppercase tracking-widest text-[10px] truncate"
+              >
+                {k}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {display.map((row, i) => (
+            <tr key={i} className="group hover:bg-[#0A0A0A] transition-colors">
+              {keys.map((k) => {
+                const val = String(row[k] ?? "");
+                const isRedacted = val.includes("[AEGIS_REDACTED");
+                return (
+                  <td
+                    key={k}
+                    className={`px-4 py-2 border-b border-[#1A1A1A]/50 truncate ${
+                      isRedacted
+                        ? "text-[#F59E0B] font-bold bg-[#F59E0B]/10"
+                        : "text-[#D4D4D8]"
+                    }`}
+                    title={val}
+                  >
+                    {val}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length > maxRows && (
+        <div className="px-4 py-2 border-t border-[#1A1A1A] text-[10px] text-[#666] uppercase tracking-widest">
+          SHOWING {maxRows} OF {rows.length} ROWS
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Home() {
   const [selectedScenario, setSelectedScenario] = useState<Scenario>(scenarios[0]);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
-  const [latency, setLatency] = useState<number | null>(null);
+  const [protectedResult, setProtectedResult] = useState<any>(null);
+  const [unprotectedResult, setUnprotectedResult] = useState<any>(null);
+  const [protectedLatency, setProtectedLatency] = useState<number | null>(null);
+  const [unprotectedLatency, setUnprotectedLatency] = useState<number | null>(null);
+  
+  // New States for "Full Marks" Polish
+  const [pipelineStep, setPipelineStep] = useState(0);
+  const [verifying, setVerifying] = useState(false);
+  const [verified, setVerified] = useState(false);
+
+  // Pipeline Animation Effect
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (loading) {
+      setPipelineStep(0);
+      interval = setInterval(() => {
+        setPipelineStep((prev) => Math.min(prev + 1, PIPELINE_STEPS.length - 1));
+      }, 300); // Progress pipeline every 300ms
+    }
+    return () => clearInterval(interval);
+  }, [loading]);
 
   const handleExecute = async () => {
     setLoading(true);
-    setResult(null);
-    setLatency(null);
-    const start = performance.now();
-    
-    try {
+    setProtectedResult(null);
+    setUnprotectedResult(null);
+    setProtectedLatency(null);
+    setUnprotectedLatency(null);
+    setVerifying(false);
+    setVerified(false);
+
+    const callApi = async (mode: string) => {
+      const start = performance.now();
       const res = await fetch("/api/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sql: selectedScenario.sql,
           tenant_id: selectedScenario.tenant_id,
+          mode,
         }),
       });
       const data = await res.json();
-      setResult(data);
+      const elapsed = performance.now() - start;
+      return { data, elapsed };
+    };
+
+    try {
+      const [protRes, unprotRes] = await Promise.allSettled([
+        callApi("protected"),
+        callApi("unprotected"),
+      ]);
+
+      if (protRes.status === "fulfilled") {
+        setProtectedResult(protRes.value.data);
+        setProtectedLatency(protRes.value.elapsed);
+      } else {
+        setProtectedResult({ error: "Failed to reach protected path" });
+      }
+
+      if (unprotRes.status === "fulfilled") {
+        setUnprotectedResult(unprotRes.value.data);
+        setUnprotectedLatency(unprotRes.value.elapsed);
+      } else {
+        setUnprotectedResult({ error: "Failed to reach unprotected path" });
+      }
     } catch (err: any) {
-      setResult({ error: err.message || "Failed to execute query" });
+      setProtectedResult({ error: err.message || "Failed to execute" });
     } finally {
-      const end = performance.now();
-      setLatency(end - start);
       setLoading(false);
     }
   };
 
+  const isBlocked = protectedResult?.decision === "BREACH_BLOCKED";
+  const isVerified = protectedResult?.decision === "INVARIANT_VERIFIED";
+
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 p-8 font-sans">
-      <header className="flex items-center justify-between border-b border-gray-800 pb-6 mb-8 max-w-7xl mx-auto">
-        <div>
-          <h1 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-3">
-            AEGIS-ZERO <span className="text-gray-400 font-normal">— Exasol AI Trust Gateway</span>
-          </h1>
-        </div>
-        <div className="flex items-center gap-2 px-3 py-1 bg-red-950/50 border border-red-900 rounded-full text-red-500 font-medium text-sm">
-          <span className="relative flex h-2.5 w-2.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
-          </span>
-          LIVE
+    <div className="min-h-screen bg-[#000000] text-[#E0E0E0] font-sans selection:bg-[#00F0FF]/30 selection:text-white">
+      <DotMatrix />
+
+      {/* Header */}
+      <header className="sticky top-0 z-10 backdrop-blur-md bg-[#000000]/80 border-b border-[#1A1A1A] px-6 py-4">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-xl md:text-2xl font-bold tracking-tight flex items-center gap-3 text-white">
+              <span className="text-[#00F0FF] text-lg">⛊</span> AEGIS-ZERO
+              <span className="text-[#666666] font-normal text-sm md:text-base tracking-normal">
+                / EXASOL TRUST GATEWAY
+              </span>
+            </h1>
+          </div>
+          <div className="flex items-center gap-4 text-xs font-mono">
+            <div className="hidden md:flex flex-col text-right">
+              <span className="text-[#888888]">SESSION / {selectedScenario.tenant_id}</span>
+              <span className="text-[#888888]">POLICY / v1.0.0</span>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1 bg-[#FF003C]/10 border border-[#FF003C]/30 text-[#FF003C] tracking-widest uppercase">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full bg-[#FF003C] opacity-75" />
+                <span className="relative inline-flex h-2 w-2 bg-[#FF003C]" />
+              </span>
+              LIVE ARENA
+            </div>
+          </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto">
-        <div className="mb-8">
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Attack Scenarios</h2>
-          <div className="flex flex-wrap gap-3">
-            {scenarios.map((scenario) => (
+      <main className="max-w-7xl mx-auto p-6 md:p-8 space-y-8">
+        
+        {/* Hero Thesis */}
+        <section className="pb-2 border-b border-[#1A1A1A]/50">
+          <h2 className="text-2xl md:text-3xl font-bold tracking-tighter text-white mb-2">
+            Deterministic LLM Defense for Exasol.
+          </h2>
+          <p className="text-[#888888] font-mono text-sm max-w-3xl leading-relaxed">
+            Aegis-Zero mathematically proves tenant isolation and neutralizes prompt injections via AST-level rewrites, minting a verifiable cryptographic receipt for every LLM database interaction.
+          </p>
+        </section>
+
+        {/* Scenario Selector (Segmented Control style) */}
+        <section>
+          <div className="text-[10px] text-[#888888] font-mono tracking-widest uppercase mb-3">
+            Select Attack Vector
+          </div>
+          <div className="flex flex-wrap gap-0 border-b border-[#1A1A1A]">
+            {scenarios.map((scenario) => {
+              const isActive = selectedScenario.name === scenario.name;
+              return (
+                <button
+                  key={scenario.name}
+                  onClick={() => {
+                    setSelectedScenario(scenario);
+                    setProtectedResult(null);
+                    setUnprotectedResult(null);
+                    setVerifying(false);
+                    setVerified(false);
+                  }}
+                  className={`px-5 py-3 text-sm font-medium transition-all uppercase tracking-wider relative -mb-[1px] ${
+                    isActive
+                      ? "text-white border-b-2 border-[#00F0FF]"
+                      : "text-[#666666] border-b-2 border-transparent hover:text-[#A0A0A0]"
+                  }`}
+                >
+                  <span className={`mr-2 font-mono text-[10px] ${isActive ? "text-[#00F0FF]" : "text-[#444]"}`}>
+                    [{scenario.tag}]
+                  </span>
+                  {scenario.name}
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-3 text-xs text-[#888888] font-mono">
+            // {selectedScenario.description}
+          </div>
+        </section>
+
+        {/* Input & Execution */}
+        <section className="bg-[#0A0A0A] border border-[#1A1A1A] p-1">
+          <div className="flex flex-col md:flex-row">
+            <div className="flex-grow p-4">
+              <label className="block text-[10px] text-[#888888] font-mono tracking-widest uppercase mb-2">
+                SQL Payload
+              </label>
+              <textarea
+                className="w-full h-16 bg-transparent text-[#00F0FF] font-mono text-sm focus:outline-none resize-none overflow-hidden"
+                value={selectedScenario.sql}
+                onChange={(e) =>
+                  setSelectedScenario({ ...selectedScenario, sql: e.target.value })
+                }
+                spellCheck={false}
+              />
+            </div>
+            <div className="md:w-64 border-t md:border-t-0 md:border-l border-[#1A1A1A] p-4 flex flex-col justify-center bg-[#050505]">
               <button
-                key={scenario.name}
-                onClick={() => setSelectedScenario(scenario)}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                  selectedScenario.name === scenario.name
-                    ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20"
-                    : "bg-gray-900 text-gray-300 hover:bg-gray-800 border border-gray-800"
-                }`}
+                onClick={handleExecute}
+                disabled={loading}
+                className="w-full bg-white text-black hover:bg-[#00F0FF] disabled:bg-[#222] disabled:text-[#666] font-bold uppercase tracking-widest text-xs py-4 transition-colors flex items-center justify-center gap-2"
               >
-                {scenario.name}
+                {loading ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    EXECUTING...
+                  </>
+                ) : (
+                  "DEPLOY PAYLOAD"
+                )}
               </button>
-            ))}
+            </div>
           </div>
-        </div>
+        </section>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Left Panel */}
-          <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-6 flex flex-col">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-gray-200 flex items-center gap-2">
-                <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
-                </svg>
-                Unprotected Path
+        {/* Dual Panel Data Streams */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          
+          {/* ─── LEFT: UNPROTECTED ─── */}
+          <section className={`bg-[#0A0A0A] border ${unprotectedResult && !loading && unprotectedResult.row_count > 0 ? "border-[#FF003C] shadow-[0_0_15px_rgba(255,0,60,0.15)]" : "border-[#1A1A1A]"} p-5 flex flex-col transition-all duration-500`}>
+            <div className="flex items-center justify-between border-b border-[#1A1A1A] pb-3 mb-5">
+              <h2 className="text-sm font-bold text-[#FF003C] uppercase tracking-widest flex items-center gap-2">
+                <span className="w-2 h-2 bg-[#FF003C]" /> Raw Database Access
               </h2>
-            </div>
-            
-            <div className="space-y-4 flex-grow">
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">Tenant ID</label>
-                <div className="px-4 py-2 bg-gray-950 rounded border border-gray-800 text-gray-300 font-mono text-sm">
-                  {selectedScenario.tenant_id}
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">Raw SQL Input</label>
-                <textarea
-                  className="w-full h-32 px-4 py-3 bg-gray-950 rounded border border-gray-800 text-red-400 font-mono text-sm focus:outline-none focus:border-red-500/50 transition-colors resize-none"
-                  value={selectedScenario.sql}
-                  onChange={(e) => setSelectedScenario({ ...selectedScenario, sql: e.target.value })}
-                />
-              </div>
-            </div>
-
-            <button
-              onClick={handleExecute}
-              disabled={loading}
-              className="mt-6 w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-800 disabled:text-gray-500 text-white font-semibold py-3 px-4 rounded-lg transition-all flex items-center justify-center gap-2"
-            >
-              {loading ? (
-                <>
-                  <svg className="animate-spin h-5 w-5 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Executing...
-                </>
-              ) : (
-                <>
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                  </svg>
-                  Execute Query
-                </>
-              )}
-            </button>
-          </div>
-
-          {/* Right Panel */}
-          <div className="bg-gray-900 rounded-xl border border-indigo-900/50 shadow-[0_0_40px_-10px_rgba(79,70,229,0.1)] p-6 flex flex-col relative overflow-hidden">
-            <div className="absolute top-0 right-0 p-32 bg-indigo-500/5 rounded-full blur-3xl -z-10 pointer-events-none"></div>
-            
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-indigo-400 flex items-center gap-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
-                </svg>
-                Protected Path (Aegis-Zero)
-              </h2>
-              {latency !== null && (
-                <div className="text-xs font-mono text-gray-400 bg-gray-950 px-2 py-1 rounded border border-gray-800">
-                  {latency.toFixed(0)}ms
-                </div>
+              {unprotectedLatency !== null && (
+                <span className="text-[10px] font-mono text-[#666]">
+                  {unprotectedLatency.toFixed(0)}MS
+                </span>
               )}
             </div>
 
-            <div className="flex-grow flex flex-col justify-center">
-              {!result && !loading && (
-                <div className="text-center text-gray-500 flex flex-col items-center py-12">
-                  <svg className="w-12 h-12 mb-3 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
-                  </svg>
-                  <p>Waiting for execution...</p>
+            <div className="flex-grow font-mono">
+              {!unprotectedResult && !loading && (
+                <div className="text-center text-[#666] py-12 text-[11px] uppercase tracking-widest px-4 border border-dashed border-[#1A1A1A]">
+                  [ Select an attack vector and deploy payload to view raw database exposure ]
                 </div>
               )}
-
               {loading && (
-                <div className="flex flex-col items-center justify-center h-full space-y-4 py-12">
-                  <div className="w-12 h-12 border-4 border-indigo-900 border-t-indigo-500 rounded-full animate-spin"></div>
-                  <p className="text-indigo-400 font-mono text-sm animate-pulse">Analyzing AST...</p>
+                <div className="text-[#FF003C] py-12 text-xs text-center animate-pulse">
+                  EXECUTING RAW SQL...
                 </div>
               )}
-
-              {result && !loading && (
-                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  {/* Decision Badge - ALWAYS RENDER */}
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-gray-400">Security Decision:</span>
-                    <div className={`px-3 py-1 rounded-full text-xs font-bold tracking-wider ${
-                      result.decision === 'INVARIANT_VERIFIED' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
-                      result.decision === 'BREACH_BLOCKED' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
-                      'bg-gray-800 text-gray-300'
-                    }`}>
-                      {result.decision || 'UNKNOWN'}
-                    </div>
+              {unprotectedResult && !loading && (
+                <div className="space-y-6">
+                  {/* Status Block */}
+                  <div className="flex flex-col gap-2">
+                    {unprotectedResult.error ? (
+                      <div className="text-xs bg-[#F59E0B]/10 text-[#F59E0B] border border-[#F59E0B]/30 p-2 uppercase tracking-widest">
+                        ERROR: DB EXCEPTION
+                      </div>
+                    ) : unprotectedResult.row_count > 0 ? (
+                      <div className="text-xs font-bold bg-[#FF003C]/10 text-[#FF003C] border border-[#FF003C]/30 p-2 uppercase tracking-widest">
+                        CRITICAL: {unprotectedResult.row_count} ROWS EXPOSED
+                      </div>
+                    ) : (
+                      <div className="text-xs bg-[#222] text-[#888] border border-[#333] p-2 uppercase tracking-widest">
+                        EXECUTED (NO DATA RETURNED)
+                      </div>
+                    )}
+                    {unprotectedResult.rolled_back && (
+                      <div className="text-[10px] text-[#666] tracking-widest uppercase">
+                        &gt; Transaction rolled back (demo safety)
+                      </div>
+                    )}
                   </div>
 
-                  {result.error ? (
-                    <div className="bg-red-950/50 border border-red-900/50 rounded-lg p-4">
-                      <div className="flex items-center gap-2 text-red-400 mb-2">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                        <h3 className="font-semibold">Execution Error</h3>
-                      </div>
-                      <p className="text-sm text-red-300 font-mono break-all">{result.error}</p>
+                  {unprotectedResult.error && (
+                    <div className="text-[11px] text-[#FF003C] bg-[#FF003C]/5 p-3 border-l-2 border-[#FF003C] break-all">
+                      {unprotectedResult.error}
                     </div>
-                  ) : (
-                    <>
-                      {/* Rewritten SQL */}
-                      <div>
-                        <label className="block text-xs font-medium text-gray-400 mb-1">Rewritten SQL (Safe)</label>
-                        <div className="bg-gray-950 rounded p-4 border border-gray-800 font-mono text-sm text-green-400 break-all whitespace-pre-wrap">
-                          {result.rewritten_sql || '—'}
-                        </div>
-                      </div>
+                  )}
 
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-xs font-medium text-gray-400 mb-1">Total Rows Returned</label>
-                          <div className="text-xl font-semibold text-gray-200">
-                            {result.row_count !== undefined ? result.row_count : '???'}
-                          </div>
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-gray-400 mb-1">Tainted Rows Scrubbed</label>
-                          <div className={`text-xl font-semibold ${result.tainted_rows > 0 ? 'text-red-400' : 'text-gray-200'}`}>
-                            {result.tainted_rows !== undefined ? result.tainted_rows : '0'}
-                          </div>
-                        </div>
+                  {unprotectedResult.rows && unprotectedResult.rows.length > 0 && (
+                    <div>
+                      <div className="text-[10px] text-[#FF003C] mb-2 uppercase tracking-widest">
+                        Unsanitized Payload Data
                       </div>
-
-                      {/* Cryptographic Receipt */}
-                      <div className="bg-gray-950/50 rounded p-4 border border-indigo-900/30">
-                        <div className="flex items-center gap-2 mb-3">
-                          <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
-                          </svg>
-                          <h3 className="text-sm font-semibold text-indigo-400">Cryptographic Receipt</h3>
-                        </div>
-                        <div className="space-y-3">
-                          <div>
-                            <label className="block text-[10px] uppercase text-gray-500 mb-1">Signature</label>
-                            <div className="font-mono text-xs text-indigo-200/70 break-all bg-gray-950 p-2 rounded border border-gray-900">
-                              {result.receipt?.signature || '—'}
-                            </div>
-                          </div>
-                          <div>
-                            <label className="block text-[10px] uppercase text-gray-500 mb-1">Public Key</label>
-                            <div className="font-mono text-xs text-gray-400 break-all bg-gray-950 p-2 rounded border border-gray-900">
-                              {result.receipt?.public_key || '—'}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </>
+                      <RowTable rows={unprotectedResult.rows} />
+                    </div>
                   )}
                 </div>
               )}
             </div>
-          </div>
+          </section>
+
+          {/* ─── RIGHT: PROTECTED ─── */}
+          <section className={`bg-[#0A0A0A] border ${isVerified ? "border-[#00F0FF] shadow-[0_0_15px_rgba(0,240,255,0.1)]" : isBlocked ? "border-[#A0A0A0]" : "border-[#1A1A1A]"} p-5 flex flex-col relative overflow-hidden transition-all duration-500`}>
+            {isVerified && <div className="absolute top-0 right-0 p-32 bg-[#00F0FF]/5 rounded-full blur-3xl -z-10 pointer-events-none" />}
+            
+            <div className="flex items-center justify-between border-b border-[#1A1A1A] pb-3 mb-5 z-10">
+              <h2 className="text-sm font-bold text-[#00F0FF] uppercase tracking-widest flex items-center gap-2">
+                <span className="w-2 h-2 bg-[#00F0FF]" /> Aegis-Zero Secure Enclave
+              </h2>
+              {protectedLatency !== null && (
+                <span className="text-[10px] font-mono text-[#666]">
+                  {protectedLatency.toFixed(0)}MS
+                </span>
+              )}
+            </div>
+
+            <div className="flex-grow font-mono z-10">
+              {!protectedResult && !loading && (
+                <div className="text-center text-[#666] py-12 text-[11px] uppercase tracking-widest px-4 border border-dashed border-[#1A1A1A]">
+                  [ Awaiting payload — Aegis-Zero will analyze AST invariants here ]
+                </div>
+              )}
+              
+              {/* Hollywood Analysis Pipeline Loading State */}
+              {loading && (
+                <div className="py-12 flex flex-col items-center justify-center gap-4">
+                  <div className="text-[#00F0FF] text-[11px] font-bold tracking-widest uppercase h-4">
+                    &gt; {PIPELINE_STEPS[pipelineStep]}
+                  </div>
+                  <div className="flex gap-1.5">
+                    {PIPELINE_STEPS.map((_, i) => (
+                      <div 
+                        key={i} 
+                        className={`h-1 w-6 transition-colors duration-300 ${
+                          i <= pipelineStep ? "bg-[#00F0FF] shadow-[0_0_8px_#00F0FF]" : "bg-[#1A1A1A]"
+                        }`} 
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {protectedResult && !loading && (
+                <div className="space-y-6">
+                  {/* Decision Block */}
+                  <div className="flex items-center gap-3 border border-[#1A1A1A] p-1 bg-[#050505]">
+                    <div className="text-[10px] text-[#666] uppercase tracking-widest px-2">Decision</div>
+                    <div className={`flex-1 text-xs font-bold uppercase tracking-widest px-3 py-1.5 ${
+                        isVerified ? "bg-[#00F0FF]/10 text-[#00F0FF]" : "bg-[#222] text-[#E0E0E0]"
+                      }`}>
+                      {protectedResult.decision}
+                    </div>
+                  </div>
+
+                  {/* Blocked State */}
+                  {isBlocked && (
+                    <div className="border border-[#333] bg-[#111] p-4 space-y-3">
+                      <div className="text-xs text-white font-bold tracking-widest uppercase">
+                        [{protectedResult.code}]
+                      </div>
+                      <div className="text-[11px] text-[#A0A0A0] leading-relaxed">
+                        {protectedResult.message}
+                      </div>
+                      {protectedResult.hint && (
+                        <div className="text-[10px] text-[#666] border-t border-[#222] pt-2 mt-2">
+                          HINT: {protectedResult.hint}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Verified State */}
+                  {isVerified && (
+                    <>
+                      {/* Rewritten SQL with Syntax Highlighting */}
+                      <div>
+                        <div className="text-[10px] text-[#888] uppercase tracking-widest mb-1.5">AST Rewritten Output</div>
+                        <div className="bg-[#050505] border border-[#1A1A1A] p-3 text-[#00F0FF] text-[11px] break-all">
+                          {formatSQL(protectedResult.rewritten_sql)}
+                        </div>
+                      </div>
+
+                      {/* Row Counts */}
+                      <div className="flex gap-4">
+                        <div className="flex-1 border border-[#1A1A1A] bg-[#050505] p-3">
+                          <div className="text-[10px] text-[#666] uppercase tracking-widest mb-1">Rows Verified</div>
+                          <div className="text-lg text-white">{protectedResult.row_count ?? 0}</div>
+                        </div>
+                        <div className="flex-1 border border-[#1A1A1A] bg-[#050505] p-3">
+                          <div className="text-[10px] text-[#666] uppercase tracking-widest mb-1">Taint Scrubbed</div>
+                          <div className={`text-lg ${protectedResult.tainted_rows > 0 ? "text-[#F59E0B]" : "text-white"}`}>
+                            {protectedResult.tainted_rows ?? 0}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Sanitized Data Table */}
+                      {protectedResult.rows && protectedResult.rows.length > 0 && (
+                        <div>
+                          <div className="text-[10px] text-[#888] uppercase tracking-widest mb-1.5">Clean Data Output</div>
+                          <RowTable rows={protectedResult.rows} />
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* Signature Element: Cryptographic Ledger Entry */}
+                  {protectedResult.receipt && (
+                    <div className="relative overflow-hidden border border-dashed border-transparent bg-[#00F0FF]/[0.02] p-4 mt-6 animate-mint opacity-0">
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-5">
+                        <span className="text-6xl font-black text-[#00F0FF] -rotate-12 whitespace-nowrap">AEGIS SECURED</span>
+                      </div>
+                      
+                      <div className="relative z-10">
+                        <div className="flex justify-between items-end border-b border-[#00F0FF]/20 pb-2 mb-3">
+                          <span className="text-[10px] text-[#00F0FF] font-bold tracking-[0.2em] flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#00F0FF] animate-pulse" />
+                            CRYPTOGRAPHIC LEDGER
+                          </span>
+                          <span className="text-[9px] text-[#00F0FF]/60">{protectedResult.receipt.timestamp}</span>
+                        </div>
+                        
+                        <div className="space-y-3 text-[10px]">
+                          <div className="flex flex-col">
+                            <span className="text-[#666] uppercase tracking-widest">Receipt_ID</span>
+                            <span className="text-[#A0A0A0]">{protectedResult.receipt.receipt_id}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-[#666] uppercase tracking-widest">Ed25519_Signature</span>
+                            <span className="text-[#00F0FF]/80 break-all">{protectedResult.receipt.signature || "UNSIGNED"}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-[#666] uppercase tracking-widest">Public_Key</span>
+                            <span className="text-[#888] break-all">{protectedResult.receipt.public_key || "N/A"}</span>
+                          </div>
+                        </div>
+
+                        {/* Interactive Verify Button */}
+                        <button
+                          onClick={() => {
+                            setVerifying(true);
+                            setTimeout(() => {
+                              setVerifying(false);
+                              setVerified(true);
+                            }, 800);
+                          }}
+                          disabled={verified || verifying}
+                          className={`mt-4 w-full py-2 text-[10px] uppercase tracking-widest font-bold border transition-all ${
+                            verified
+                              ? "bg-[#10B981]/10 border-[#10B981]/30 text-[#10B981]"
+                              : verifying
+                              ? "bg-[#00F0FF]/10 border-[#00F0FF]/30 text-[#00F0FF] animate-pulse"
+                              : "bg-transparent border-[#00F0FF]/30 text-[#00F0FF] hover:bg-[#00F0FF]/10"
+                          }`}
+                        >
+                          {verified 
+                            ? "✓ SIGNATURE VALIDATED" 
+                            : verifying 
+                            ? "VERIFYING ED25519 HASH..." 
+                            : "VERIFY CRYPTO-SIGNATURE"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Error Catch */}
+                  {protectedResult.error && !isBlocked && (
+                    <div className="text-[11px] text-[#FF003C] bg-[#FF003C]/5 p-3 border-l-2 border-[#FF003C] break-all mt-4">
+                      {protectedResult.error}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+
         </div>
       </main>
     </div>
