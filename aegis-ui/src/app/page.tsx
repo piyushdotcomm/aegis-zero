@@ -10,6 +10,41 @@ type Scenario = {
   description: string;
 };
 
+type RowData = Record<string, unknown>;
+
+type ReceiptView = {
+  receipt_id: string | null;
+  timestamp: string | null;
+  signature: string | null;
+  public_key: string | null;
+  policy_version: string | null;
+  decision: string | null;
+};
+
+type ProtectedResult = {
+  mode?: string;
+  decision?: string;
+  code?: string | null;
+  message?: string | null;
+  hint?: string | null;
+  original_sql?: string;
+  rewritten_sql?: string | null;
+  rows?: RowData[];
+  row_count?: number;
+  tainted_rows?: number;
+  receipt?: ReceiptView;
+  error?: string;
+};
+
+type UnprotectedResult = {
+  mode?: string;
+  executed?: boolean;
+  rolled_back?: boolean;
+  error?: string | null;
+  rows?: RowData[];
+  row_count?: number;
+};
+
 const scenarios: Scenario[] = [
   {
     name: "Safe Query",
@@ -49,7 +84,7 @@ const scenarios: Scenario[] = [
 ];
 
 // Helper: SQL Syntax Highlighter
-const formatSQL = (sql: string) => {
+const formatSQL = (sql: string | null | undefined) => {
   if (!sql) return "";
   const keywords = [
     "SELECT", "FROM", "WHERE", "AND", "OR", "LIMIT", "UNION", "ALL",
@@ -96,7 +131,7 @@ const DotMatrix = () => (
   </div>
 );
 
-function RowTable({ rows, maxRows = 10 }: { rows: any[]; maxRows?: number }) {
+function RowTable({ rows, maxRows = 10 }: { rows: RowData[]; maxRows?: number }) {
   if (!rows || rows.length === 0) return null;
   const display = rows.slice(0, maxRows);
   const keys = Object.keys(display[0]);
@@ -152,8 +187,8 @@ function RowTable({ rows, maxRows = 10 }: { rows: any[]; maxRows?: number }) {
 export default function Home() {
   const [selectedScenario, setSelectedScenario] = useState<Scenario>(scenarios[0]);
   const [loading, setLoading] = useState(false);
-  const [protectedResult, setProtectedResult] = useState<any>(null);
-  const [unprotectedResult, setUnprotectedResult] = useState<any>(null);
+  const [protectedResult, setProtectedResult] = useState<ProtectedResult | null>(null);
+  const [unprotectedResult, setUnprotectedResult] = useState<UnprotectedResult | null>(null);
   const [protectedLatency, setProtectedLatency] = useState<number | null>(null);
   const [unprotectedLatency, setUnprotectedLatency] = useState<number | null>(null);
   
@@ -164,18 +199,16 @@ export default function Home() {
 
   // Pipeline Animation Effect
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (loading) {
-      setPipelineStep(0);
-      interval = setInterval(() => {
-        setPipelineStep((prev) => Math.min(prev + 1, PIPELINE_STEPS.length - 1));
-      }, 300); // Progress pipeline every 300ms
-    }
+    if (!loading) return;
+    const interval = setInterval(() => {
+      setPipelineStep((prev) => Math.min(prev + 1, PIPELINE_STEPS.length - 1));
+    }, 300); // Progress pipeline every 300ms
     return () => clearInterval(interval);
   }, [loading]);
 
   const handleExecute = async () => {
     setLoading(true);
+    setPipelineStep(0);
     setProtectedResult(null);
     setUnprotectedResult(null);
     setProtectedLatency(null);
@@ -218,8 +251,10 @@ export default function Home() {
       } else {
         setUnprotectedResult({ error: "Failed to reach unprotected path" });
       }
-    } catch (err: any) {
-      setProtectedResult({ error: err.message || "Failed to execute" });
+    } catch (err) {
+      setProtectedResult({
+        error: err instanceof Error ? err.message : "Failed to execute",
+      });
     } finally {
       setLoading(false);
     }
@@ -304,7 +339,7 @@ export default function Home() {
             })}
           </div>
           <div className="mt-3 text-xs text-[#888888] font-mono">
-            // {selectedScenario.description}
+            {"// "}{selectedScenario.description}
           </div>
         </section>
 
@@ -350,7 +385,7 @@ export default function Home() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           
           {/* ─── LEFT: UNPROTECTED ─── */}
-          <section className={`bg-[#0A0A0A] border ${unprotectedResult && !loading && unprotectedResult.row_count > 0 ? "border-[#FF003C] shadow-[0_0_15px_rgba(255,0,60,0.15)]" : "border-[#1A1A1A]"} p-5 flex flex-col transition-all duration-500`}>
+          <section className={`bg-[#0A0A0A] border ${unprotectedResult && !loading && (unprotectedResult.row_count ?? 0) > 0 ? "border-[#FF003C] shadow-[0_0_15px_rgba(255,0,60,0.15)]" : "border-[#1A1A1A]"} p-5 flex flex-col transition-all duration-500`}>
             <div className="flex items-center justify-between border-b border-[#1A1A1A] pb-3 mb-5">
               <h2 className="text-sm font-bold text-[#FF003C] uppercase tracking-widest flex items-center gap-2">
                 <span className="w-2 h-2 bg-[#FF003C]" /> Raw Database Access
@@ -381,9 +416,9 @@ export default function Home() {
                       <div className="text-xs bg-[#F59E0B]/10 text-[#F59E0B] border border-[#F59E0B]/30 p-2 uppercase tracking-widest">
                         ERROR: DB EXCEPTION
                       </div>
-                    ) : unprotectedResult.row_count > 0 ? (
+                    ) : (unprotectedResult.row_count ?? 0) > 0 ? (
                       <div className="text-xs font-bold bg-[#FF003C]/10 text-[#FF003C] border border-[#FF003C]/30 p-2 uppercase tracking-widest">
-                        CRITICAL: {unprotectedResult.row_count} ROWS EXPOSED
+                        CRITICAL: {unprotectedResult.row_count ?? 0} ROWS EXPOSED
                       </div>
                     ) : (
                       <div className="text-xs bg-[#222] text-[#888] border border-[#333] p-2 uppercase tracking-widest">
@@ -505,7 +540,7 @@ export default function Home() {
                         </div>
                         <div className="flex-1 border border-[#1A1A1A] bg-[#050505] p-3">
                           <div className="text-[10px] text-[#666] uppercase tracking-widest mb-1">Taint Scrubbed</div>
-                          <div className={`text-lg ${protectedResult.tainted_rows > 0 ? "text-[#F59E0B]" : "text-white"}`}>
+                          <div className={`text-lg ${(protectedResult.tainted_rows ?? 0) > 0 ? "text-[#F59E0B]" : "text-white"}`}>
                             {protectedResult.tainted_rows ?? 0}
                           </div>
                         </div>

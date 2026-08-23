@@ -3,6 +3,28 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import path from 'path';
 
+type ToolContent = { type: string; text?: string };
+type ToolResult = { content?: ToolContent[]; isError?: boolean };
+
+interface ToolPayload {
+  decision?: string;
+  code?: string | null;
+  message?: string | null;
+  hint?: string | null;
+  original_sql?: string;
+  rewritten_sql?: string | null;
+  results?: Record<string, unknown>[];
+  row_count?: number;
+  tainted_rows?: number;
+  receipt?: Record<string, string | null>;
+  executed?: boolean;
+  rolled_back?: boolean;
+  error?: string | null;
+  rows?: Record<string, unknown>[];
+  sql?: string;
+  raw?: string;
+}
+
 async function callMcpTool(toolName: string, args: Record<string, unknown>) {
   const isWindows = process.platform === 'win32';
   const pythonBin = isWindows ? 'python.exe' : 'python';
@@ -20,13 +42,13 @@ async function callMcpTool(toolName: string, args: Record<string, unknown>) {
       { capabilities: {} },
     );
     await client.connect(transport);
-    const result: any = await client.callTool({ name: toolName, arguments: args });
+    const result = (await client.callTool({ name: toolName, arguments: args })) as ToolResult;
 
-    let payload: any = {};
+    let payload: ToolPayload = {};
     if (result.content && result.content.length > 0) {
-      const text = result.content[0].text;
+      const text = result.content[0]?.text ?? '';
       try {
-        payload = JSON.parse(text);
+        payload = JSON.parse(text) as ToolPayload;
       } catch {
         payload = { raw: text };
       }
@@ -99,8 +121,11 @@ export async function POST(req: Request) {
         decision: receipt.decision || null,
       },
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error executing MCP tool:', error);
-    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal Server Error' },
+      { status: 500 },
+    );
   }
 }

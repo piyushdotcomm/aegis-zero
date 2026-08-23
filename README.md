@@ -4,6 +4,16 @@
 
 Aegis-Zero is an enterprise-grade AI security gateway designed to protect databases from malicious Large Language Models (LLMs) and Prompt Injection attacks. It sits as a secure middleware layer (Model Context Protocol) between an AI Agent and your Exasol database, enforcing strict row-level tenant isolation, blast radius containment, and data exfiltration prevention.
 
+> **Track:** AI Trust, Safety & Governance — Exasol AI Build Challenge 2026
+>
+> **🎬 Demo video (3 min):** _[ADD VIDEO LINK HERE BEFORE SUBMITTING]_
+
+## Team
+
+<!-- REQUIRED per challenge rules (3–5 members) — fill in before submitting:
+- [Name] — [role / contribution]
+-->
+
 ## Features
 
 - **AST Invariant Kernel**: Parses and dynamically rewrites SQL Abstract Syntax Trees to deterministically enforce tenant isolation (`AND tenant_id = 'X'`). Blocks destructive queries (`DROP TABLE`), catalog snooping (`EXA_*`), subqueries/CTEs hiding protected tables, UNION/set operations, OR tautologies, and multi-statement injection.
@@ -143,6 +153,17 @@ Full transparency about how this project meets the "Exasol Personal as primary d
 - **Python**: `sqlglot` (Exasol dialect), `cryptography` (Ed25519), `pyexasol`, `fastmcp`
 - **TypeScript**: Next.js 16, Tailwind CSS v4, `@modelcontextprotocol/sdk`
 - **Database**: Exasol (Docker-DB for the recorded demo; Exasol Personal supported with zero code changes)
+
+## Testing & Reproducibility
+
+```bash
+# Security invariant test suite (33 tests — no database required)
+python -m pytest tests/ -v
+```
+
+- CI runs the full suite on every push: [![CI](https://github.com/piyushdotcomm/aegis-zero/actions/workflows/ci.yml/badge.svg)](https://github.com/piyushdotcomm/aegis-zero/actions/workflows/ci.yml)
+- Python 3.12; exact runtime environment pinned in [`requirements-lock.txt`](requirements-lock.txt).
+- Configuration via environment variables only — see [`.env.example`](.env.example). Secrets are never committed.
 
 ## Prior Art
 - [SQLGlot](https://github.com/tobymao/sqlglot) — SQL parser/transpiler with Exasol dialect
