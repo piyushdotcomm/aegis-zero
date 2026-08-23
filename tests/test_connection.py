@@ -1,6 +1,7 @@
-# tests/test_connection.py
+import ssl
 from unittest.mock import patch
 from aegis.exasol_client.connection import get_connection
+
 
 @patch('pyexasol.connect')
 def test_get_connection(mock_connect):
@@ -11,5 +12,6 @@ def test_get_connection(mock_connect):
         password="pass",
         schema="MYSCHEMA",
         compression=True,
-        fetch_dict=True
+        fetch_dict=True,
+        websocket_sslopt={"cert_reqs": ssl.CERT_NONE}
     )

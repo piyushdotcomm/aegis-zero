@@ -1,6 +1,6 @@
 pyexasol[pandas]
 sqlglot
 cryptography
+fastmcp
 pytest
 pytest-cov
-mcp[cli]
