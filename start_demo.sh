@@ -3,26 +3,30 @@ set -e
 
 echo -e "\033[1;36m⛊ Starting Aegis-Zero Enterprise Environment...\033[0m"
 
-# 1. Check Docker
-if ! docker info > /dev/null 2>&1; then
-    echo -e "\033[1;31mERROR: Docker is not running.\033[0m"
-    echo -e "\033[1;33mPlease start Docker and try again.\033[0m"
-    exit 1
-fi
-
-# 2. Exasol Database
-echo -e "\n\033[1;34m[1/4] Booting Exasol Database Container...\033[0m"
-if [ ! "$(docker ps -aq -f name=exasoldb)" ]; then
-    echo "Downloading and starting Exasol container (this takes a moment)..."
-    docker run --name exasoldb -p 8563:8563 --detach --privileged --stop-timeout 120 exasol/docker-db:latest
+# 1 & 2. Exasol Database — Exasol Personal (EXA_DSN set) or local Docker-DB
+if [ -n "$EXA_DSN" ]; then
+    echo -e "\n\033[1;34m[1/4] Using external Exasol Personal deployment at $EXA_DSN...\033[0m"
 else
-    echo "Starting existing Exasol container..."
-    docker start exasoldb > /dev/null
-fi
+    # Check Docker
+    if ! docker info > /dev/null 2>&1; then
+        echo -e "\033[1;31mERROR: Docker is not running.\033[0m"
+        echo -e "\033[1;33mPlease start Docker and try again.\033[0m"
+        exit 1
+    fi
 
-if [ "$1" != "--skip-setup" ]; then
-    echo -e "\033[1;33mWaiting 10 seconds for Exasol DB to initialize...\033[0m"
-    sleep 10
+    echo -e "\n\033[1;34m[1/4] Booting Exasol Database Container...\033[0m"
+    if [ ! "$(docker ps -aq -f name=exasoldb)" ]; then
+        echo "Downloading and starting Exasol container (this takes a moment)..."
+        docker run --name exasoldb -p 8563:8563 --detach --privileged --stop-timeout 120 exasol/docker-db:latest
+    else
+        echo "Starting existing Exasol container..."
+        docker start exasoldb > /dev/null
+    fi
+
+    if [ "$1" != "--skip-setup" ]; then
+        echo -e "\033[1;33mWaiting 10 seconds for Exasol DB to initialize...\033[0m"
+        sleep 10
+    fi
 fi
 
 # 3. Python Backend

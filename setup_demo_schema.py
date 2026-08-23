@@ -1,18 +1,24 @@
 import pyexasol
+import os
 import time
 import sys
 
 def connect_with_retry():
     max_retries = 18
     retry_delay = 10
-    
+
+    dsn = os.getenv("EXA_DSN", "localhost:8563")
+    user = os.getenv("EXA_USER", "sys")
+    password = os.getenv("EXA_PASSWORD", "exasol")
+    target = "Exasol Personal" if os.getenv("EXA_DSN") else "local Exasol Docker-DB"
+
     for attempt in range(1, max_retries + 1):
         try:
-            print(f"Attempt {attempt}/{max_retries}: Connecting to Exasol...", flush=True)
+            print(f"Attempt {attempt}/{max_retries}: Connecting to {target} at {dsn}...", flush=True)
             conn = pyexasol.connect(
-                dsn='localhost:8563',
-                user='sys',
-                password='exasol',
+                dsn=dsn,
+                user=user,
+                password=password,
                 compression=True,
                 encryption=True,
                 websocket_sslopt={"cert_reqs": 0} # 0 is ssl.CERT_NONE
@@ -30,10 +36,11 @@ def connect_with_retry():
 
 def main():
     conn = connect_with_retry()
-    
+    schema = os.getenv("EXA_SCHEMA", "AEGIS_DEMO")
+
     statements = [
-        "CREATE SCHEMA IF NOT EXISTS AEGIS_DEMO",
-        "OPEN SCHEMA AEGIS_DEMO",
+        f"CREATE SCHEMA IF NOT EXISTS {schema}",
+        f"OPEN SCHEMA {schema}",
         """CREATE OR REPLACE TABLE CUSTOMERS (
     CUSTOMER_ID   DECIMAL(18,0),
     TENANT_ID     VARCHAR(50),

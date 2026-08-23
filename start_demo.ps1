@@ -4,28 +4,32 @@ param(
 
 Write-Host "⛊ Starting Aegis-Zero Enterprise Environment..." -ForegroundColor Cyan
 
-# 1. Check Docker
-docker info >$null 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Docker is not running." -ForegroundColor Red
-    Write-Host "Please start Docker Desktop and run this script again." -ForegroundColor Yellow
-    exit 1
-}
-
-# 2. Exasol Database Container
-Write-Host "`n[1/4] Booting Exasol Database Container..." -ForegroundColor Blue
-$container = docker ps -aq -f name=exasoldb
-if (!$container) {
-    Write-Host "Downloading and starting Exasol container (this takes a moment)..."
-    docker run --name exasoldb -p 8563:8563 --detach --privileged --stop-timeout 120 exasol/docker-db:latest
+# 1 & 2. Exasol Database — Exasol Personal (EXA_DSN set) or local Docker-DB
+if ($env:EXA_DSN) {
+    Write-Host "`n[1/4] Using external Exasol Personal deployment at $($env:EXA_DSN)..." -ForegroundColor Blue
 } else {
-    Write-Host "Starting existing Exasol container..."
-    docker start exasoldb | Out-Null
-}
+    # 1. Check Docker
+    docker info >$null 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Docker is not running." -ForegroundColor Red
+        Write-Host "Please start Docker Desktop and run this script again." -ForegroundColor Yellow
+        exit 1
+    }
 
-if (-not $SkipSetup) {
-    Write-Host "Waiting 10 seconds for Exasol DB to initialize..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 10
+    Write-Host "`n[1/4] Booting Exasol Database Container..." -ForegroundColor Blue
+    $container = docker ps -aq -f name=exasoldb
+    if (!$container) {
+        Write-Host "Downloading and starting Exasol container (this takes a moment)..."
+        docker run --name exasoldb -p 8563:8563 --detach --privileged --stop-timeout 120 exasol/docker-db:latest
+    } else {
+        Write-Host "Starting existing Exasol container..."
+        docker start exasoldb | Out-Null
+    }
+
+    if (-not $SkipSetup) {
+        Write-Host "Waiting 10 seconds for Exasol DB to initialize..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 10
+    }
 }
 
 # 3. Python Backend Setup
