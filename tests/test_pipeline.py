@@ -86,3 +86,27 @@ def test_pipeline_receipt_verifiable():
     # Tamper detection
     receipt["row_count"] = 999
     assert pipeline.signer.verify(receipt) is False
+
+
+def test_pipeline_db_error_returns_receipt():
+    """Regression: a database failure AFTER approval must return a structured
+    EXECUTION_ERROR result with a signed receipt — not raise a raw exception.
+    Every operation is auditable, including failed ones."""
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = Exception("connection reset by peer")
+
+    pipeline = AegisSecurityPipeline(connection=mock_conn, tenant_id="t1", limit=10)
+    result = pipeline.execute("SELECT id FROM my_table")
+
+    assert result["decision"] == "EXECUTION_ERROR"
+    assert result["code"] == "DB_EXECUTION_ERROR"
+    assert "connection reset by peer" in result["message"]
+    assert result["results"] == []
+    assert result["row_count"] == 0
+
+    # The failure is still signed and auditable
+    receipt = result["receipt"]
+    assert "signature_ed25519" in receipt
+    assert receipt["decision"] == "EXECUTION_ERROR"
+    assert receipt["code"] == "DB_EXECUTION_ERROR"
+    assert pipeline.signer.verify(receipt) is True

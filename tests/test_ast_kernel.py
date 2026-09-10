@@ -277,3 +277,72 @@ def test_empty_query_blocked():
     with pytest.raises(AegisBlockError) as exc_info:
         kernel.transform("")
     assert exc_info.value.code in ("EMPTY_QUERY", "UNPARSEABLE_SQL")
+
+
+# ----------------------------------------------------------------------
+# Regression tests for the security audit fixes
+# ----------------------------------------------------------------------
+
+def test_tenant_id_injection_is_neutralized():
+    """A hostile tenant_id string must never break out of the SQL literal.
+
+    The clamp previously interpolated tenant_id via f-string, so
+    "x' OR '1'='1" rewrote the query into a tenant-isolation-breaking
+    OR tautology. The literal must now be built through the AST.
+    """
+    kernel = ASTInvariantKernel(
+        tenant_id="tenant_alpha' OR '1'='1",
+        limit=500,
+        protected_tables={"customers"},
+    )
+    rewritten = kernel.transform("SELECT name FROM customers")
+    # The attacker string must stay INSIDE one escaped literal and must not
+    # create any OR predicate in the parsed AST.
+    import sqlglot
+
+    ast = sqlglot.parse_one(rewritten)
+    ors = list(ast.find_all(sqlglot.exp.Or))
+    assert len(ors) == 0
+    # The tenant predicate must be a single EQ comparing against one literal
+    eqs = [
+        eq
+        for eq in ast.find_all(sqlglot.exp.EQ)
+        if any(col.name.lower() == "tenant_id" for col in eq.find_all(sqlglot.exp.Column))
+    ]
+    assert len(eqs) == 1
+    literals = eqs[0].find_all(sqlglot.exp.Literal)
+    tenant_lits = [l for l in literals if l.is_string and "OR" in l.this.upper()]
+    assert len(tenant_lits) == 1  # intact inside the escaped literal, not split out
+
+
+def test_tenant_id_injection_join_clamp():
+    """Same injection attempt through the aliased join clamp path."""
+    kernel = ASTInvariantKernel(
+        tenant_id="t' OR '1'='1",
+        limit=500,
+        protected_tables={"customers", "invoices"},
+    )
+    rewritten = kernel.transform(
+        "SELECT c.name FROM customers c JOIN invoices i ON c.customer_id = i.customer_id"
+    )
+    import sqlglot
+
+    ast = sqlglot.parse_one(rewritten)
+    assert len(list(ast.find_all(sqlglot.exp.Or))) == 0
+    assert rewritten.count("tenant_id") == 2
+
+
+def test_or_in_join_on_clause_blocked():
+    """OR predicates inside JOIN ... ON must not bypass the no-OR policy
+    on protected tables (previously only the top-level WHERE was scanned)."""
+    kernel = ASTInvariantKernel(
+        tenant_id="tenant_alpha",
+        limit=500,
+        protected_tables={"customers", "invoices"},
+    )
+    with pytest.raises(ValueError) as exc_info:
+        kernel.transform(
+            "SELECT c.* FROM customers c JOIN invoices i "
+            "ON c.tenant_id = i.tenant_id OR 1 = 1"
+        )
+    assert exc_info.value.code == "OR_PREDICATE_BLOCKED"

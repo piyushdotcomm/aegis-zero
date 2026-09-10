@@ -84,8 +84,37 @@ class AegisSecurityPipeline:
             }
 
         # --- Execute approved query ---
-        stmt = self.connection.execute(safe_query)
-        raw_rows = to_jsonable(stmt.fetchall())
+        # Failures here (connection reset, missing table, timeouts) must still
+        # produce a structured result and a signed receipt — every operation
+        # is auditable, including failed ones. The error never escapes the
+        # pipeline as a raw exception.
+        try:
+            stmt = self.connection.execute(safe_query)
+            raw_rows = to_jsonable(stmt.fetchall())
+        except AegisBlockError:
+            raise
+        except Exception as e:
+            receipt = self._build_receipt(
+                decision="EXECUTION_ERROR",
+                code="DB_EXECUTION_ERROR",
+                original_sql=query,
+                rewritten_sql=safe_query,
+                row_count=0,
+                tainted_rows=0,
+                results_hash=None,
+            )
+            return {
+                "decision": "EXECUTION_ERROR",
+                "code": "DB_EXECUTION_ERROR",
+                "message": f"Approved query failed during database execution: {e}",
+                "hint": "Check that the referenced objects exist and the database connection is healthy.",
+                "original_sql": query,
+                "rewritten_sql": safe_query,
+                "results": [],
+                "row_count": 0,
+                "tainted_rows": 0,
+                "receipt": receipt,
+            }
 
         # --- Sanitize returned data ---
         sanitized_rows, tainted_count = self.shield.scan_and_sanitize(raw_rows)

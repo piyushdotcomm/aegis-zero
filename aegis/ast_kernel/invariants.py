@@ -150,28 +150,34 @@ class ASTInvariantKernel:
                             )
 
         # --- OR-predicate policy on protected tables ---
+        # Scans the ENTIRE statement, not just the top-level WHERE, so OR
+        # tautologies hidden in JOIN ... ON (or deeper predicates) cannot
+        # bypass the conservative no-OR policy on protected tables.
         if protected_in_query:
-            where = ast.args.get("where")
-            if where is not None:
-                for _ in where.find_all(exp.Or):
-                    raise AegisBlockError(
-                        "OR_PREDICATE_BLOCKED",
-                        "OR predicates are not permitted on queries involving protected tables. "
-                        "Conservative policy: prevents tenant isolation bypass via OR tautologies.",
-                        "Rewrite without OR, or split into separate queries.",
-                    )
+            for _ in ast.find_all(exp.Or):
+                raise AegisBlockError(
+                    "OR_PREDICATE_BLOCKED",
+                    "OR predicates are not permitted on queries involving protected tables. "
+                    "Conservative policy: prevents tenant isolation bypass via OR tautologies.",
+                    "Rewrite without OR, or split into separate queries.",
+                )
 
         # --- Tenant isolation clamp ---
         if self.tenant_id:
+            # Build the tenant literal through sqlglot's expression tree so a
+            # hostile tenant_id (e.g. "x' OR '1'='1") can never break out of
+            # the string literal and inject SQL into the rewritten query.
+            # The MCP tool argument is untrusted input from the LLM.
+            tenant_literal = exp.Literal.string(self.tenant_id)
             if self.protected_tables is not None and protected_in_query:
                 for t in protected_in_query:
                     alias = t.alias_or_name
-                    cond = exp.condition(
-                        f"{alias}.tenant_id = '{self.tenant_id}'"
-                    )
+                    col = exp.column("tenant_id", table=alias)
+                    cond = exp.EQ(this=col, expression=tenant_literal.copy())
                     ast = ast.where(cond)
             elif self.protected_tables is None:
-                cond = exp.condition(f"tenant_id = '{self.tenant_id}'")
+                col = exp.column("tenant_id")
+                cond = exp.EQ(this=col, expression=tenant_literal)
                 ast = ast.where(cond)
 
         # --- LIMIT clamp (min of existing and max_row_limit) ---
