@@ -8,13 +8,22 @@ def to_jsonable(obj):
     """Recursively convert non-JSON-serializable types (Decimal, datetime, bytes)."""
     import decimal
     import datetime
+    import math
 
     if isinstance(obj, dict):
-        return {k: to_jsonable(v) for k, v in obj.items()}
+        return {str(k) if not isinstance(k, str) else k: to_jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [to_jsonable(v) for v in obj]
     if isinstance(obj, decimal.Decimal):
+        # NaN/Infinity decimals (e.g. from DOUBLE columns) cannot be emitted
+        # as JSON numbers without breaking the canonical receipt encoding.
+        if obj.is_nan() or obj.is_infinite():
+            return None
         return int(obj) if obj == int(obj) else float(obj)
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
     if isinstance(obj, (datetime.datetime, datetime.date)):
         return obj.isoformat()
     if isinstance(obj, bytes):
